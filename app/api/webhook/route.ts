@@ -3,6 +3,7 @@ import { createHmac } from 'crypto'
 import { NextRequest } from 'next/server'
 import fs from 'fs'
 import Groq from 'groq-sdk'
+import { searchCodebase } from '@/lib/search'
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
@@ -14,7 +15,7 @@ const app = new App({
   }
 })
 
-async function analyzeWithAI(diff: string, prTitle: string, prBody: string) {
+async function analyzeWithAI(diff: string, prTitle: string, prBody: string, context: string) {
   const response = await groq.chat.completions.create({
     model: 'llama-3.1-8b-instant',
     messages: [
@@ -25,7 +26,7 @@ async function analyzeWithAI(diff: string, prTitle: string, prBody: string) {
       },
       {
         role: 'user',
-        content: `PR Title: ${prTitle}\n\nPR Description: ${prBody || 'No description provided.'}\n\nDiff:\n${diff}`
+        content: `PR Title: ${prTitle}\n\nPR Description: ${prBody || 'No description provided.'}\n\nRelevant codebase context (similar code patterns from this repository):\n${context}\n\nDiff:\n${diff}`
       }
     ]
   })
@@ -126,7 +127,12 @@ export async function POST(request: NextRequest) {
     console.log('Diff fetched successfully')
     console.log(diff)
 
-    const review = await analyzeWithAI(diff as string, pull_request.title, pull_request.body ?? '')
+    const diffStr = diff as string
+    const searchQuery = pull_request.title + ' ' + diffStr.slice(0, 500)
+    const searchResults = await searchCodebase(searchQuery, repository.full_name)
+    const context = searchResults.map((r: { filename: string; content: string }) => `File: ${r.filename}\n${r.content}`).join('\n\n')
+
+    const review = await analyzeWithAI(diffStr, pull_request.title, pull_request.body ?? '', context)
     const comment = formatReview(review, pull_request)
 
     await octokit.request(
